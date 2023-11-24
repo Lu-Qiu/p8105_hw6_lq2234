@@ -1,0 +1,13 @@
+---
+title: "Homework 6"
+author: "Lu Qiu"
+date: "2023-11-24"
+output: github_document
+---
+
+### Problem 1
+
+### Problem 2
+
+
+### Problem 3
