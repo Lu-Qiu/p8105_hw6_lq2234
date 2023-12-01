@@ -9,6 +9,7 @@ output: github_document
 library(tidyverse)
 library(viridis)
 library(modelr)
+library(purrr)
 
 knitr::opts_chunk$set(
 	echo = TRUE,
@@ -105,7 +106,9 @@ model_results |>
 From this plot we see that most cities have odds ratios that are smaller than 1, suggesting that crimes with male victims have smaller odds of resolution compared to crimes with female victims after adjusting for victim age and race. This disparity is strongest in New York. In roughly half of these cities, confidence intervals are narrow and do not contain 1, suggesting a significant difference in resolution rates by sex after adjustment for victim age and race.
 
 ### Problem 2
-For this problem, we’ll use the Central Park weather data similar to data we’ve seen elsewhere. The code chunk below (adapted from the course website) will download these data.
+
+#### Load the data
+For this problem, we’ll use the Central Park weather data similar to data we’ve seen elsewhere. The code chunk below will download these data.
 ```{r}
 weather_df = 
   rnoaa::meteo_pull_monitors(
@@ -122,7 +125,9 @@ weather_df =
 set.seed(1)
 ```
 
-The boostrap is helpful when you’d like to perform inference for a parameter / value / summary that doesn’t have an easy-to-write-down distribution in the usual repeated sampling framework. We’ll focus on a simple linear regression with tmax as the response with tmin and prcp as the predictors, and are interested in the distribution of two quantities estimated from these data:
+#### Bootstrapping
+
+The bootstrap is helpful when you’d like to perform inference for a parameter / value / summary that doesn’t have an easy-to-write-down distribution in the usual repeated sampling framework. We’ll focus on a simple linear regression with tmax as the response with tmin and prcp as the predictors, and are interested in the distribution of two quantities estimated from these data:
 
 *  \( r^2 \)
 * log(β̂ 1∗β̂ 2)
@@ -146,7 +151,7 @@ boot_straps =
   )
 ```
 
-
+#### Fit the linear model
 Next, fit the linear model with tmax as the response and tmin and prcp as predictors.
 ```{r}
 boot_results =
@@ -162,6 +167,7 @@ boot_results =
   
 ```
 
+#### Plot the distribution
 Plot the distribution of estimates.
 ```{r}
 # Plotting distribution of r_squared
@@ -178,8 +184,9 @@ boot_results |>
 ```
 
 The r-squared value is high and appears to follow a normal distribution, centered around ~0.92. However, the distribution of log(beta1 * beta2)  is somewhat left-skewed.
- 
-Calculate 95% confidence intervals
+
+#### Calculate 95% CI
+Calculate the 95% confidence intervals
 ```{r}
 # CI for r_square
 boot_results |>
@@ -202,15 +209,106 @@ boot_results |>
 
 ### Problem 3
 
+#### Load and clean data
 Load and clean the data for regression analysis (i.e. convert numeric to factor where appropriate, check for missing data, etc.).
 
 ```{r}
 birthweight_df = 
   read_csv("data/birthweight.csv", na = c("", "NA", "Unknown")) |>
+  janitor::clean_names() |>
   mutate(babysex = as.factor(babysex),
          frace = as.factor(frace),
          malform = as.factor(malform),
-         mrace = as.factor(mrace))
-  
+         mrace = as.factor(mrace)) |>
+  select(bwt,everything())
+
+# check for missing values
+sum(is.na(birthweight_df))
 ```
 
+#### Fit a full model
+First, we fit a linear model with all the other variables as predictors.
+```{r}
+fit = lm(bwt ~., data = birthweight_df) 
+broom::tidy(fit) |> knitr::kable()
+```
+
+#### Select variables 
+Then, we select predictors from the full model using a stepwise approach.
+```{r}
+stepwise_model <- MASS::stepAIC(fit, direction = "both", trace = FALSE)
+broom::tidy(stepwise_model) |> knitr::kable()
+```
+
+The selected predictors are: babysex, bhead, blength, delwt, fincome, gaweeks, mheight, mrace, parity, ppwt, smoken.
+
+#### Residuals vs fitted values plot
+```{r}
+birthweight_df |>
+  add_predictions(stepwise_model) |>
+  add_residuals(stepwise_model) |>
+  ggplot(aes(x = pred, y = resid)) + 
+  geom_point() +
+  labs(title = "Residuals vs Fitted Values Plot") + 
+  xlab("Fitted Value") + 
+  ylab("Residuals")
+```
+
+#### Model comparison
+
+Compare my model to two others:
+
+* One using length at birth and gestational age as predictors (main effects only)
+* One using head circumference, length, sex, and all interactions (including the three-way interaction) between these
+
+```{r}
+cv_df =
+  crossv_mc(birthweight_df, 100) |>
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+```
+
+```{r}
+cv_df |>
+  mutate(
+    my_model  = map(train, ~lm(bwt ~ babysex + bhead + blength + delwt + fincome + 
+    gaweeks + mheight + mrace + parity + ppwt + smoken, data = .x)),
+    model_1  = map(train, ~lm(bwt ~ gaweeks + blength, data = .x)),
+    model_2  = map(train, ~lm(bwt ~ bhead*blength*babysex, data = .x))) |>
+  mutate(
+    rmse_my_model = map2_dbl(my_model, test, ~rmse(model = .x, data = .y)),
+    rmse_1    = map2_dbl(model_1, test, ~rmse(model = .x, data = .y)),
+    rmse_2 = map2_dbl(model_2, test, ~rmse(model = .x, data = .y))) |>
+  summarize(
+    avg_rmse_my_model = mean(rmse_my_model),
+    avg_rmse_model_1 = mean(rmse_1),
+    avg_rmse_model_2  = mean(rmse_2)
+  ) |>
+  knitr::kable()
+```
+
+The plot below shows the distribution of RMSE values for each candidate model.
+```{r}
+cv_df |>
+  mutate(
+    my_model  = map(train, ~lm(bwt ~ babysex + bhead + blength + delwt + fincome + 
+    gaweeks + mheight + mrace + parity + ppwt + smoken, data = .x)),
+    model_1  = map(train, ~lm(bwt ~ gaweeks + blength, data = .x)),
+    model_2  = map(train, ~lm(bwt ~ bhead*blength*babysex, data = .x))) |>
+  mutate(
+    rmse_my_model = map2_dbl(my_model, test, ~rmse(model = .x, data = .y)),
+    rmse_1    = map2_dbl(model_1, test, ~rmse(model = .x, data = .y)),
+    rmse_2 = map2_dbl(model_2, test, ~rmse(model = .x, data = .y))) |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + 
+  geom_violin(aes(fill = model))
+```
+
+From the above plot, we can see that my model has the lowest mean RMSE, indicating the best model performance among the three models. The main effect model (model 1) has the highest RMSE. The interaction model (model 2) has RMSE slightly higher than my model.
